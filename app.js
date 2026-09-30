@@ -159,12 +159,19 @@ function updateTimerDisplay() {
   }
 }
 
+function pickLetter() {
+  return LETTERS[Math.floor(Math.random() * LETTERS.length)];
+}
+
 function passTurn() {
   if (state !== 'playing') return;
   playPassSound();
+  clearTimers();
   currentPlayerIndex = (currentPlayerIndex + 1) % activePlayers.length;
+  currentCategory = pickCategory();
+  currentLetter = pickLetter();
   timeLeft = ROUND_TIME;
-  if (timerInterval) clearInterval(timerInterval);
+  state = 'playing';
   render();
   startTimer();
 }
