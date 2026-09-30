@@ -13,65 +13,237 @@ const categories = [
   'Algo que te gustaría hacer', 'Algo que te gustaría regalar', 'Algo que harías si fueras invisible', 'Algo que llevarías a una isla desierta', 'Algo que harías si pudieras volar'
 ];
 
+const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'L', 'M', 'N', 'O', 'P', 'R', 'S', 'T', 'U', 'V'];
+const ROUND_TIME = 15;
+const SUSPENSE_DURATION = 3000;
+
 const app = document.querySelector('#app');
-let deck = [];
-let current = null;
-let isDrawing = false;
-let confirmReset = false;
+
+let state = 'setup';
+let players = [];
+let activePlayers = [];
+let currentPlayerIndex = 0;
+let currentCategory = null;
+let currentLetter = null;
+let timeLeft = ROUND_TIME;
+let timerInterval = null;
+let suspenseTimeout = null;
+let usedCategories = [];
+
+let audioCtx = null;
+
+function ensureAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function beep(freq, duration, type = 'square', volume = 0.15) {
+  const ctx = ensureAudio();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, ctx.currentTime);
+  gain.gain.setValueAtTime(volume, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + duration);
+}
+
+function playTick(secondsLeft) {
+  if (secondsLeft <= 3) beep(900 + (4 - secondsLeft) * 150, 0.12, 'square', 0.18);
+  else beep(600, 0.08, 'square', 0.12);
+}
+
+function playBuzzer() {
+  const ctx = ensureAudio();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(220, ctx.currentTime);
+  osc.frequency.linearRampToValueAtTime(110, ctx.currentTime + 0.6);
+  gain.gain.setValueAtTime(0.2, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.7);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + 0.7);
+}
+
+function playSuspenseBeep() {
+  beep(440, 0.1, 'sine', 0.1);
+}
+
+function playPassSound() {
+  beep(880, 0.06, 'sine', 0.12);
+  setTimeout(() => beep(1320, 0.08, 'sine', 0.1), 60);
+}
+
+function playWinSound() {
+  [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => beep(f, 0.18, 'triangle', 0.15), i * 120));
+}
 
 function shuffle(items) {
   const result = [...items];
-  for (let index = result.length - 1; index > 0; index -= 1) {
-    const randomIndex = Math.floor(Math.random() * (index + 1));
-    [result[index], result[randomIndex]] = [result[randomIndex], result[index]];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
   }
   return result;
 }
 
-function resetGame() {
-  deck = shuffle(categories);
-  current = null;
-  confirmReset = false;
-  render();
+function pickCategory() {
+  if (usedCategories.length >= categories.length) usedCategories = [];
+  const remaining = categories.filter((c) => !usedCategories.includes(c));
+  const cat = remaining[Math.floor(Math.random() * remaining.length)];
+  usedCategories.push(cat);
+  return cat;
 }
 
-function handleReset() {
-  const used = categories.length - deck.length;
-  if (used === 0 || confirmReset) {
-    resetGame();
+function clearTimers() {
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  if (suspenseTimeout) { clearTimeout(suspenseTimeout); suspenseTimeout = null; }
+}
+
+function startNewRound() {
+  clearTimers();
+  currentCategory = pickCategory();
+  currentLetter = null;
+  state = 'suspense';
+  render();
+
+  playSuspenseBeep();
+  suspenseTimeout = setTimeout(() => {
+    playSuspenseBeep();
+  }, SUSPENSE_DURATION / 2);
+
+  suspenseTimeout = setTimeout(() => {
+    currentLetter = LETTERS[Math.floor(Math.random() * LETTERS.length)];
+    timeLeft = ROUND_TIME;
+    state = 'playing';
+    render();
+    startTimer();
+  }, SUSPENSE_DURATION);
+}
+
+function startTimer() {
+  if (timerInterval) clearInterval(timerInterval);
+  playTick(timeLeft);
+  timerInterval = setInterval(() => {
+    timeLeft--;
+    if (timeLeft <= 0) {
+      clearTimers();
+      playBuzzer();
+      eliminateCurrentPlayer();
+    } else {
+      playTick(timeLeft);
+      updateTimerDisplay();
+    }
+  }, 1000);
+}
+
+function updateTimerDisplay() {
+  const el = document.querySelector('.timer-display');
+  if (el) {
+    el.textContent = timeLeft;
+    el.classList.toggle('timer-urgent', timeLeft <= 3);
+  }
+  const ring = document.querySelector('.timer-ring-fill');
+  if (ring) {
+    const pct = (timeLeft / ROUND_TIME) * 100;
+    ring.style.strokeDashoffset = 283 - (283 * pct) / 100;
+  }
+}
+
+function passTurn() {
+  if (state !== 'playing') return;
+  playPassSound();
+  currentPlayerIndex = (currentPlayerIndex + 1) % activePlayers.length;
+  timeLeft = ROUND_TIME;
+  if (timerInterval) clearInterval(timerInterval);
+  render();
+  startTimer();
+}
+
+function eliminateCurrentPlayer() {
+  const eliminated = activePlayers[currentPlayerIndex];
+  activePlayers.splice(currentPlayerIndex, 1);
+  if (currentPlayerIndex >= activePlayers.length) currentPlayerIndex = 0;
+  state = 'eliminated';
+  render();
+
+  if (activePlayers.length <= 1) {
+    setTimeout(() => {
+      state = 'winner';
+      playWinSound();
+      render();
+    }, 3500);
+  }
+}
+
+function continueWithoutPlayer() {
+  if (activePlayers.length <= 1) {
+    state = 'winner';
+    playWinSound();
+    render();
     return;
   }
-  confirmReset = true;
-  render();
-  window.setTimeout(() => {
-    if (confirmReset) {
-      confirmReset = false;
-      render();
-    }
-  }, 3000);
+  startNewRound();
 }
 
-function drawCard() {
-  if (isDrawing || deck.length === 0) return;
-  isDrawing = true;
-  window.setTimeout(() => {
-    current = deck.pop();
-    isDrawing = false;
-    render();
-  }, 180);
+function newGame() {
+  clearTimers();
+  state = 'setup';
+  players = [];
+  activePlayers = [];
+  currentPlayerIndex = 0;
+  currentCategory = null;
+  currentLetter = null;
+  usedCategories = [];
+  render();
+}
+
+function addPlayer(name) {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  players.push(trimmed);
+  render();
+}
+
+function removePlayer(index) {
+  players.splice(index, 1);
+  render();
+}
+
+function startGame() {
+  if (players.length < 2) return;
+  activePlayers = [...players];
+  currentPlayerIndex = 0;
+  usedCategories = [];
+  startNewRound();
 }
 
 function render() {
-  const available = deck.length;
-  const used = categories.length - available;
-  const progress = Math.round((used / categories.length) * 100);
-  const isFinished = available === 0 && current !== null;
-  const cardNumber = used;
+  const screens = {
+    setup: renderSetup,
+    suspense: renderSuspense,
+    playing: renderPlaying,
+    eliminated: renderEliminated,
+    winner: renderWinner,
+  };
+  app.innerHTML = screens[state]();
+  attachHandlers();
+}
 
-  const resetLabel = confirmReset ? '¿Seguro? Tocá de nuevo' : 'Empezar de nuevo';
-  const resetClass = confirmReset ? 'restart-button confirm' : 'restart-button';
-
-  app.innerHTML = `
+function shell(inner, showReset = true) {
+  const resetBtn = showReset && state !== 'setup' && state !== 'winner'
+    ? `<button class="restart-button" type="button" data-action="newgame"><span aria-hidden="true">↻</span> Nueva partida</button>`
+    : '';
+  return `
     <div class="page-shell">
       <header class="topbar">
         <a class="brand" href="./" aria-label="App By Franmax, inicio">
@@ -80,74 +252,236 @@ function render() {
         </a>
         <div class="top-actions">
           <button class="icon-button" type="button" data-action="help" aria-label="Cómo jugar">?</button>
-          <button class="${resetClass}" type="button" data-action="reset"><span aria-hidden="true">↻</span> ${resetLabel}</button>
+          ${resetBtn}
         </div>
       </header>
-
-      <main class="main-content">
-        <section class="intro" aria-labelledby="page-title">
-          <p class="eyebrow">Creado para Pipi, Angeles y Lucca</p>
-          <h1 id="page-title">App By<br /><em>Franmax</em></h1>
-          <p class="lead">Sacá una tarjeta, pensá rápido y dejá que empiece la ronda.</p>
-        </section>
-
-        <section class="game-card" aria-live="polite">
-          <div class="card-topline">
-            <span class="round-label">${isFinished ? 'Partida completa' : current ? 'Categoría actual' : 'Tu turno comienza aquí'}</span>
-            <span class="remaining-label">${available} ${available === 1 ? 'disponible' : 'disponibles'}</span>
-          </div>
-          <div class="card-body ${current ? 'has-category' : ''} ${isFinished ? 'is-finished' : ''}">
-            <div class="card-stamp" aria-hidden="true">${isFinished ? '✓' : String(cardNumber).padStart(2, '0')}</div>
-            <p class="card-kicker">${isFinished ? '¡Ronda terminada!' : current ? 'Respondan todos' : '¿Listos?'}</p>
-            <h2>${isFinished ? 'Salieron todas las tarjetas.' : current || 'Sacá una tarjeta'}</h2>
-            <p class="card-hint">${isFinished ? 'Volvé a mezclar para jugar otra vez.' : current ? 'Cuando todos respondan, saquen la siguiente.' : 'La primera respuesta puede ser la más divertida.'}</p>
-          </div>
-          <div class="card-footer">
-            <div class="progress-wrap" aria-label="${progress}% de tarjetas utilizadas">
-              <div class="progress-meta"><span>Progreso de la partida</span><strong>${used} / ${categories.length}</strong></div>
-              <div class="progress-track"><span style="width: ${progress}%"></span></div>
-            </div>
-            <button class="draw-button" type="button" data-action="${isFinished ? 'reset' : 'draw'}">
-              <span>${isFinished ? 'Empezar de nuevo' : current ? 'Siguiente tarjeta' : 'Sacar tarjeta'}</span>
-              <b aria-hidden="true">→</b>
-            </button>
-          </div>
-        </section>
-
-        <section class="tips" aria-label="Consejos de juego">
-          <div class="tip"><span class="tip-number">01</span><div><h3>Piensen juntos</h3><p>No hay respuestas correctas o incorrectas. La idea es pasarla bien.</p></div></div>
-          <div class="tip"><span class="tip-number">02</span><div><h3>Sin repetir</h3><p>Cada tarjeta aparece una sola vez por partida.</p></div></div>
-          <div class="tip"><span class="tip-number">03</span><div><h3>Para todas las edades</h3><p>Categorías simples, familiares y algunas para reírse.</p></div></div>
-        </section>
-      </main>
+      <main class="main-content">${inner}</main>
       <footer class="footer"><span>App By Franmax</span><span>Creado para Pipi, Angeles y Lucca.</span></footer>
     </div>
+    ${helpModal()}
+  `;
+}
+
+function helpModal() {
+  return `
     <div class="modal-backdrop" data-action="close-help" hidden>
       <section class="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title">
         <button class="modal-close" type="button" data-action="close-help" aria-label="Cerrar">×</button>
         <p class="eyebrow">Cómo jugar</p>
-        <h2 id="help-title">Una ronda en tres pasos.</h2>
-        <ol><li>Toquen <strong>Sacar tarjeta</strong>.</li><li>Todos piensan una respuesta para la categoría.</li><li>Cuando terminen, pasen a la siguiente.</li></ol>
-        <p class="modal-note">Las tarjetas no se repiten hasta que termina la partida. Pueden jugar con o sin una letra.</p>
+        <h2 id="help-title">Basta Electrónico</h2>
+        <ol>
+          <li>Decí la cantidad de jugadores y sus nombres.</li>
+          <li>La app saca una categoría y una letra al azar.</li>
+          <li>Cuando sea tu turno, decí una palabra que empiece con esa letra y encaje en la categoría.</li>
+          <li>Tocá el botón para pasar al siguiente jugador. El reloj no se detiene.</li>
+          <li>Si se acaba el tiempo, quedás eliminado. ¡El último en pie gana!</li>
+        </ol>
+        <p class="modal-note">Pasen el celular entre ustedes. El reloj sigue corriendo para cada jugador.</p>
       </section>
     </div>
   `;
+}
 
-  document.querySelectorAll('[data-action="draw"]').forEach((button) => button.addEventListener('click', drawCard));
-  document.querySelectorAll('[data-action="reset"]').forEach((button) => button.addEventListener('click', handleReset));
+function renderSetup() {
+  const playerList = players.map((p, i) => `
+    <li class="player-chip">
+      <span>${escapeHtml(p)}</span>
+      <button class="chip-remove" type="button" data-action="remove" data-index="${i}" aria-label="Quitar a ${escapeHtml(p)}">×</button>
+    </li>
+  `).join('');
+
+  const playerInputs = Array.from({ length: Math.max(2, players.length) }, (_, i) => {
+    const val = players[i] || '';
+    return `<input class="name-input" type="text" data-index="${i}" value="${escapeAttr(val)}" placeholder="Jugador ${i + 1}" maxlength="20" />`;
+  }).join('');
+
+  return shell(`
+    <section class="setup-screen">
+      <p class="eyebrow">Creado para Pipi, Angeles y Lucca</p>
+      <h1>App By<br /><em>Franmax</em></h1>
+      <p class="lead">Basta Electrónico: pasen el celular, digan la palabra y que no se acabe el tiempo.</p>
+
+      <div class="setup-card">
+        <h2 class="setup-title">¿Quiénes van a jugar?</h2>
+        <p class="setup-hint">Escribí los nombres y después toqué Empezar. Mínimo 2 jugadores.</p>
+        <div class="name-inputs">${playerInputs}</div>
+        <button class="add-player-btn" type="button" data-action="addplayer">+ Agregar jugador</button>
+        ${players.length > 0 ? `<ul class="player-list">${playerList}</ul>` : ''}
+        <button class="start-game-btn" type="button" data-action="start">Empezar a jugar</button>
+      </div>
+    </section>
+  `, false);
+}
+
+function renderSuspense() {
+  const playerName = escapeHtml(activePlayers[currentPlayerIndex] || '');
+  return shell(`
+    <section class="suspense-screen">
+      <div class="suspense-card">
+        <p class="suspense-turn-label">Le toca a</p>
+        <h2 class="suspense-player">${playerName}</h2>
+        <div class="suspense-spinner" aria-hidden="true">
+          <div class="spinner-ring"></div>
+          <div class="spinner-ring"></div>
+          <div class="spinner-ring"></div>
+        </div>
+        <p class="suspense-category-label">Categoría</p>
+        <h3 class="suspense-category">${escapeHtml(currentCategory || '')}</h3>
+        <p class="suspense-hint">Preparando la letra...</p>
+      </div>
+    </section>
+  `);
+}
+
+function renderPlaying() {
+  const playerName = escapeHtml(activePlayers[currentPlayerIndex] || '');
+  const nextIndex = (currentPlayerIndex + 1) % activePlayers.length;
+  const nextPlayer = escapeHtml(activePlayers[nextIndex] || '');
+  const remaining = activePlayers.length;
+  const ringDash = 283 - (283 * (timeLeft / ROUND_TIME)) / 100;
+
+  return shell(`
+    <section class="playing-screen">
+      <div class="playing-card">
+        <div class="playing-topline">
+          <span class="round-label">Le toca a</span>
+          <span class="remaining-label">${remaining} ${remaining === 1 ? 'jugador' : 'jugadores'} en pie</span>
+        </div>
+        <h2 class="playing-player">${playerName}</h2>
+        <div class="category-letter-block">
+          <div class="category-block">
+            <p class="block-label">Categoría</p>
+            <h3 class="block-value category-value">${escapeHtml(currentCategory || '')}</h3>
+          </div>
+          <div class="letter-block">
+            <p class="block-label">Letra</p>
+            <h3 class="block-value letter-value">${currentLetter || ''}</h3>
+          </div>
+        </div>
+        <div class="timer-section">
+          <div class="timer-ring">
+            <svg viewBox="0 0 100 100" class="timer-svg">
+              <circle class="timer-ring-bg" cx="50" cy="50" r="45" />
+              <circle class="timer-ring-fill" cx="50" cy="50" r="45" style="stroke-dashoffset: ${ringDash}" />
+            </svg>
+            <span class="timer-display ${timeLeft <= 3 ? 'timer-urgent' : ''}">${timeLeft}</span>
+          </div>
+        </div>
+        <button class="pass-button" type="button" data-action="pass">
+          <span>¡Dije la palabra!</span>
+          <b>Pasar a ${nextPlayer} →</b>
+        </button>
+      </div>
+    </section>
+  `);
+}
+
+function renderEliminated() {
+  const remaining = activePlayers.length;
+  const remainingList = activePlayers.map((p) => `<li>${escapeHtml(p)}</li>`).join('');
+  const eliminatedName = players.find((p) => !activePlayers.includes(p));
+
+  if (remaining <= 1) {
+    return shell(`
+      <section class="eliminated-screen">
+        <div class="eliminated-card">
+          <div class="eliminated-icon" aria-hidden="true">⏰</div>
+          <h2>${escapeHtml(eliminatedName || '')} se quedó sin tiempo</h2>
+          <p class="eliminated-hint">Queda un solo jugador...</p>
+        </div>
+      </section>
+    `);
+  }
+
+  return shell(`
+    <section class="eliminated-screen">
+      <div class="eliminated-card">
+        <div class="eliminated-icon" aria-hidden="true">⏰</div>
+        <h2>${escapeHtml(eliminatedName || '')} ha quedado fuera de esta ronda</h2>
+        <p class="eliminated-hint">Jugadores restantes:</p>
+        <ul class="remaining-players">${remainingList}</ul>
+        <div class="eliminated-actions">
+          <button class="btn-continue" type="button" data-action="continue">Seguir jugando</button>
+          <button class="btn-newgame" type="button" data-action="newgame">Iniciar nueva partida</button>
+        </div>
+      </div>
+    </section>
+  `);
+}
+
+function renderWinner() {
+  const winner = activePlayers[0] || '';
+  return shell(`
+    <section class="winner-screen">
+      <div class="winner-card">
+        <div class="winner-trophy" aria-hidden="true">🏆</div>
+        <p class="eyebrow">¡Fin de la partida!</p>
+        <h2>¡${escapeHtml(winner)} es el ganador!</h2>
+        <p class="winner-hint">Sobreviviste a todas las rondas.</p>
+        <button class="btn-newgame btn-winner" type="button" data-action="newgame">Jugar de nuevo</button>
+      </div>
+    </section>
+  `, false);
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function escapeAttr(str) {
+  return String(str).replace(/"/g, '&quot;');
+}
+
+function attachHandlers() {
+  document.querySelectorAll('[data-action="pass"]').forEach((b) => b.addEventListener('click', () => { ensureAudio(); passTurn(); }));
+  document.querySelectorAll('[data-action="continue"]').forEach((b) => b.addEventListener('click', continueWithoutPlayer));
+  document.querySelectorAll('[data-action="newgame"]').forEach((b) => b.addEventListener('click', newGame));
+  document.querySelectorAll('[data-action="start"]').forEach((b) => b.addEventListener('click', () => {
+    collectNames();
+    if (players.length >= 2) { ensureAudio(); startGame(); }
+  }));
+  document.querySelectorAll('[data-action="addplayer"]').forEach((b) => b.addEventListener('click', () => {
+    collectNames();
+    players.push('');
+    render();
+    const inputs = document.querySelectorAll('.name-input');
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  }));
+  document.querySelectorAll('[data-action="remove"]').forEach((b) => b.addEventListener('click', (e) => {
+    collectNames();
+    removePlayer(parseInt(e.currentTarget.dataset.index, 10));
+  }));
+  document.querySelectorAll('.name-input').forEach((input) => {
+    input.addEventListener('input', () => collectNames());
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        collectNames();
+        if (players.length >= 2) { ensureAudio(); startGame(); }
+      }
+    });
+  });
   document.querySelector('[data-action="help"]')?.addEventListener('click', () => {
     const modal = document.querySelector('.modal-backdrop');
     if (modal) modal.hidden = false;
   });
-  document.querySelectorAll('[data-action="close-help"]').forEach((button) => button.addEventListener('click', (event) => {
-    if (event.target === event.currentTarget || event.currentTarget.classList.contains('modal-close')) {
+  document.querySelectorAll('[data-action="close-help"]').forEach((b) => b.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget || e.currentTarget.classList.contains('modal-close')) {
       const modal = document.querySelector('.modal-backdrop');
       if (modal) modal.hidden = true;
     }
   }));
 }
 
-resetGame();
+function collectNames() {
+  const inputs = document.querySelectorAll('.name-input');
+  const newPlayers = [];
+  inputs.forEach((input) => {
+    const val = input.value.trim();
+    if (val) newPlayers.push(val);
+  });
+  players = newPlayers;
+}
+
+render();
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
 }

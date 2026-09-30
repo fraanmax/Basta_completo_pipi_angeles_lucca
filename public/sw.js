@@ -1,4 +1,4 @@
-const CACHE_NAME = 'basta-familiar-v1';
+const CACHE_NAME = 'basta-familiar-v2';
 const APP_SHELL = ['./', './index.html', './styles.css', './app.js', './manifest.json', './icons/icon.svg'];
 
 self.addEventListener('install', (event) => {
