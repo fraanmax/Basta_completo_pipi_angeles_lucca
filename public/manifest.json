@@ -1,0 +1,17 @@
+{
+  "name": "App By Franmax",
+  "short_name": "Franmax",
+  "description": "Creado para Pipi, Angeles y Lucca.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f1e8",
+  "theme_color": "#f5f1e8",
+  "orientation": "portrait-primary",
+  "icons": [{
+    "src": "./icons/icon.svg",
+    "sizes": "any",
+    "type": "image/svg+xml",
+    "purpose": "any maskable"
+  }]
+}
