@@ -29,6 +29,7 @@ let timeLeft = ROUND_TIME;
 let timerInterval = null;
 let suspenseTimeout = null;
 let usedCategories = [];
+let lastEliminatedPlayer = null;
 
 let audioCtx = null;
 
@@ -87,15 +88,6 @@ function playWinSound() {
   [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => beep(f, 0.18, 'triangle', 0.15), i * 120));
 }
 
-function shuffle(items) {
-  const result = [...items];
-  for (let i = result.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [result[i], result[j]] = [result[j], result[i]];
-  }
-  return result;
-}
-
 function pickCategory() {
   if (usedCategories.length >= categories.length) usedCategories = [];
   const remaining = categories.filter((c) => !usedCategories.includes(c));
@@ -104,12 +96,16 @@ function pickCategory() {
   return cat;
 }
 
+function pickLetter() {
+  return LETTERS[Math.floor(Math.random() * LETTERS.length)];
+}
+
 function clearTimers() {
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
   if (suspenseTimeout) { clearTimeout(suspenseTimeout); suspenseTimeout = null; }
 }
 
-function startNewRound() {
+function startNewTurn() {
   clearTimers();
   currentCategory = pickCategory();
   currentLetter = null;
@@ -122,7 +118,7 @@ function startNewRound() {
   }, SUSPENSE_DURATION / 2);
 
   suspenseTimeout = setTimeout(() => {
-    currentLetter = LETTERS[Math.floor(Math.random() * LETTERS.length)];
+    currentLetter = pickLetter();
     timeLeft = ROUND_TIME;
     state = 'playing';
     render();
@@ -159,36 +155,26 @@ function updateTimerDisplay() {
   }
 }
 
-function pickLetter() {
-  return LETTERS[Math.floor(Math.random() * LETTERS.length)];
-}
-
 function passTurn() {
   if (state !== 'playing') return;
   playPassSound();
   clearTimers();
   currentPlayerIndex = (currentPlayerIndex + 1) % activePlayers.length;
-  currentCategory = pickCategory();
-  currentLetter = pickLetter();
-  timeLeft = ROUND_TIME;
-  state = 'playing';
-  render();
-  startTimer();
+  startNewTurn();
 }
 
 function eliminateCurrentPlayer() {
-  const eliminated = activePlayers[currentPlayerIndex];
+  lastEliminatedPlayer = activePlayers[currentPlayerIndex];
   activePlayers.splice(currentPlayerIndex, 1);
   if (currentPlayerIndex >= activePlayers.length) currentPlayerIndex = 0;
-  state = 'eliminated';
-  render();
-
+  
   if (activePlayers.length <= 1) {
-    setTimeout(() => {
-      state = 'winner';
-      playWinSound();
-      render();
-    }, 3500);
+    state = 'winner';
+    playWinSound();
+    render();
+  } else {
+    state = 'eliminated';
+    render();
   }
 }
 
@@ -199,7 +185,7 @@ function continueWithoutPlayer() {
     render();
     return;
   }
-  startNewRound();
+  startNewTurn();
 }
 
 function newGame() {
@@ -211,6 +197,7 @@ function newGame() {
   currentCategory = null;
   currentLetter = null;
   usedCategories = [];
+  lastEliminatedPlayer = null;
   render();
 }
 
@@ -231,7 +218,7 @@ function startGame() {
   activePlayers = [...players];
   currentPlayerIndex = 0;
   usedCategories = [];
-  startNewRound();
+  startNewTurn();
 }
 
 function render() {
@@ -277,13 +264,13 @@ function helpModal() {
         <p class="eyebrow">Cómo jugar</p>
         <h2 id="help-title">Basta Electrónico</h2>
         <ol>
-          <li>Decí la cantidad de jugadores y sus nombres.</li>
-          <li>La app saca una categoría y una letra al azar.</li>
-          <li>Cuando sea tu turno, decí una palabra que empiece con esa letra y encaje en la categoría.</li>
-          <li>Tocá el botón para pasar al siguiente jugador. El reloj no se detiene.</li>
-          <li>Si se acaba el tiempo, quedás eliminado. ¡El último en pie gana!</li>
+          <li>Ingresá los nombres de los jugadores.</li>
+          <li>En cada turno la app te dará una categoría y una letra al azar.</li>
+          <li>Decí rápido una palabra que corresponda antes de que expire el tiempo.</li>
+          <li>Tocá el botón para pasar el celular al siguiente jugador. ¡La tarjeta y letra cambiarán!</li>
+          <li>Si se termina la cuenta regresiva, quedás eliminado. ¡Gana el último en pie!</li>
         </ol>
-        <p class="modal-note">Pasen el celular entre ustedes. El reloj sigue corriendo para cada jugador.</p>
+        <p class="modal-note">Pasen el celular entre ustedes en cada turno.</p>
       </section>
     </div>
   `;
@@ -310,7 +297,7 @@ function renderSetup() {
 
       <div class="setup-card">
         <h2 class="setup-title">¿Quiénes van a jugar?</h2>
-        <p class="setup-hint">Escribí los nombres y después toqué Empezar. Mínimo 2 jugadores.</p>
+        <p class="setup-hint">Escribí los nombres y después tocá Empezar. Mínimo 2 jugadores.</p>
         <div class="name-inputs">${playerInputs}</div>
         <button class="add-player-btn" type="button" data-action="addplayer">+ Agregar jugador</button>
         ${players.length > 0 ? `<ul class="player-list">${playerList}</ul>` : ''}
@@ -384,27 +371,13 @@ function renderPlaying() {
 }
 
 function renderEliminated() {
-  const remaining = activePlayers.length;
   const remainingList = activePlayers.map((p) => `<li>${escapeHtml(p)}</li>`).join('');
-  const eliminatedName = players.find((p) => !activePlayers.includes(p));
-
-  if (remaining <= 1) {
-    return shell(`
-      <section class="eliminated-screen">
-        <div class="eliminated-card">
-          <div class="eliminated-icon" aria-hidden="true">⏰</div>
-          <h2>${escapeHtml(eliminatedName || '')} se quedó sin tiempo</h2>
-          <p class="eliminated-hint">Queda un solo jugador...</p>
-        </div>
-      </section>
-    `);
-  }
 
   return shell(`
     <section class="eliminated-screen">
       <div class="eliminated-card">
         <div class="eliminated-icon" aria-hidden="true">⏰</div>
-        <h2>${escapeHtml(eliminatedName || '')} ha quedado fuera de esta ronda</h2>
+        <h2>${escapeHtml(lastEliminatedPlayer || 'Un jugador')} ha quedado fuera de esta ronda</h2>
         <p class="eliminated-hint">Jugadores restantes:</p>
         <ul class="remaining-players">${remainingList}</ul>
         <div class="eliminated-actions">
